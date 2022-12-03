@@ -1,0 +1,27 @@
+name: Deploy
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Enter the AWS region (e.g., us-east-2)"
+        required: true
+
+jobs:
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: Dev
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v2
+      - uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.IAMROLE_GITHUB }}
+          role-session-name: GitHub-Action-Role
+          aws-region: ${{ github.event.inputs.region }}
+      - name: chmod
+        run: chmod -R +x ./.github *.sh
+      - run: |
+          ./deploy.sh

@@ -1,0 +1,37 @@
+Parameters:
+  StateBucketName:
+    Description: Name of the S3 bucket to place the Terraform state files in.
+    Type: String
+    Default: !Sub terraform-state-${AWS::Region}-${AWS::AccountId}
+  LockTableName:
+    Description: Name of the DynamoDB table to store state locks.
+    Type: String
+    Default: terraform-lock
+
+AWSTemplateFormatVersion: 2010-09-09
+Resources:
+  TerraformStateBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      AccessControl: Private
+      BucketName: !Ref StateBucketName
+      VersioningConfiguration:
+        Status: Enabled
+
+  TerraformLockTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: LockID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: LockID
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      TableName: !Ref LockTableName
+      
+Outputs:
+  StackName:
+    Value: !Ref AWS::StackName
