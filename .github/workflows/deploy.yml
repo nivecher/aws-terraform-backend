@@ -5,6 +5,7 @@ on:
       region:
         description: "Enter the AWS region (e.g., us-east-2)"
         required: true
+        default: us-east-2
 
 env:
   AWS_REGION: ${{ github.event.inputs.region }}
