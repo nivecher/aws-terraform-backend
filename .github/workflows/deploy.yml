@@ -24,8 +24,9 @@ jobs:
           role-session-name: GitHub-Action-Role
           aws-region: ${{ env.AWS_REGION }}
       - name: chmod
-        run: chmod -R +x ./.github
+        run: chmod -R +x ./.github *.sh
   deploy:
+    name: Deploy
     needs: build
     runs-on: ubuntu-latest
     environment: Dev
