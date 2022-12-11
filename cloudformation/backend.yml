@@ -31,6 +31,27 @@ Resources:
         - !Ref StateBucketName
       VersioningConfiguration:
         Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  StateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StateBucket
+      PolicyDocument:
+        Statement:
+          - Sid: DenyIncorrectEncryptionHeader
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:PutObject"
+            Resource: !Sub
+              - "${BucketArn}/*"
+              - BucketArn: !GetAtt StateBucket.Arn
+            Condition:
+              "StringNotEquals":
+                s3:x-amz-server-side-encryption: AES256
 
   LockTable:
     Type: "AWS::DynamoDB::Table"

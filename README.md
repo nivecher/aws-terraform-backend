@@ -21,6 +21,7 @@ state backend for that module.
 
 * __`LockTable`__ (`AWS::DynamoDB::Table`): DynamoDB table to lock Terraform
 * __`StateBucket`__ (`AWS::S3::Bucket`): Bucket containing Terraform state
+* __`StateBucketPolicy`__ (`AWS::S3::BucketPolicy`): Bucket policy for the state bucket enforcing encryption
 
 ### Outputs
 
