@@ -1,25 +1,41 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: |
+  This Cloudformation template creates an S3 bucket and DynamoDB table suitable
+  for a Terraform S3 State Backend. Using this template avoids the problem of
+  needing to use a Terraform module to create a state backend before you have a
+  state backend for that module.
 Parameters:
   StateBucketName:
-    Description: Name of the S3 bucket to place the Terraform state files in.
+    Description: |
+      Name of the S3 bucket to place the Terraform state files in;
+      Defaults to "terraform-state-AWS_ACCOUNT_ID"
     Type: String
-    Default: !Sub terraform-state-${AWS::Region}-${AWS::AccountId}
+    Default: ""
   LockTableName:
     Description: Name of the DynamoDB table to store state locks.
     Type: String
     Default: terraform-lock
 
-AWSTemplateFormatVersion: 2010-09-09
+Conditions:
+  GenerateBucketName: !Equals [!Ref StateBucketName, ""]
+
 Resources:
-  TerraformStateBucket:
+  StateBucket:
     Type: "AWS::S3::Bucket"
     Properties:
       AccessControl: Private
-      BucketName: !Ref StateBucketName
+      BucketName: !If
+        - GenerateBucketName
+        - !Sub "terraform-state-${AWS::AccountId}"
+        - !Ref StateBucketName
       VersioningConfiguration:
         Status: Enabled
 
-  TerraformLockTable:
+  LockTable:
     Type: "AWS::DynamoDB::Table"
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       AttributeDefinitions:
         - AttributeName: LockID
@@ -31,7 +47,22 @@ Resources:
         ReadCapacityUnits: 5
         WriteCapacityUnits: 5
       TableName: !Ref LockTableName
-      
+      # TODO add KMS encryption
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W78
+            reason: Terraform lock tables do not need to be backed up
+      Description: DynamoDB table to lock Terraform
+
 Outputs:
   StackName:
     Value: !Ref AWS::StackName
+  Region:
+    Value: !Ref AWS::Region
+  StateBucketName:
+    Description: Name of the S3 bucket containing Terraform state
+    Value: !Ref StateBucket
+  LockTableName:
+    Description: Name of the DynamoDB table used to lock Terraform state
+    Value: !Ref LockTable
