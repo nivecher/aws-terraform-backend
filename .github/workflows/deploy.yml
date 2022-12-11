@@ -3,12 +3,12 @@ on:
   workflow_dispatch:
     inputs:
       region:
-        description: "Enter the region to bootstrap (e.g., us-east-2)"
+        description: "Enter the AWS region (e.g., us-east-2)"
         required: true
 
 env:
   AWS_REGION: ${{ github.event.inputs.region }}
-  
+
 jobs:
   deploy:
     name: Deploy
