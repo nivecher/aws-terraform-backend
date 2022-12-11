@@ -8,10 +8,12 @@ on:
 
 env:
   AWS_REGION: ${{ github.event.inputs.region }}
+  
 jobs:
-  build:
-    name: Build and Package
+  deploy:
+    name: Deploy
     runs-on: ubuntu-latest
+    environment: Dev
     permissions:
       id-token: write
       contents: read
@@ -25,20 +27,5 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - name: chmod
         run: chmod -R +x ./.github *.sh
-  deploy:
-    name: Deploy
-    needs: build
-    runs-on: ubuntu-latest
-    environment: Dev
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v2
-      - uses: aws-actions/configure-aws-credentials@v1
-        with:
-          role-to-assume: ${{ secrets.IAMROLE_GITHUB }}
-          role-session-name: GitHub-Action-Role
-          aws-region: ${{ env.AWS_REGION }}
       - run: |
           ./deploy.sh
