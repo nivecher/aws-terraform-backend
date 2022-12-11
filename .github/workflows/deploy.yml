@@ -6,11 +6,14 @@ on:
         description: "Enter the AWS region (e.g., us-east-2)"
         required: true
 
+env:
+  AWS_REGION: ${{ github.event.inputs.region }}
+
 jobs:
   deploy:
-    needs: build
+    # needs: build TODO add dep on build
     runs-on: ubuntu-latest
-    environment: Dev
+    environment: dev # TODO handle other envs
     permissions:
       id-token: write
       contents: read
@@ -20,7 +23,7 @@ jobs:
         with:
           role-to-assume: ${{ secrets.IAMROLE_GITHUB }}
           role-session-name: GitHub-Action-Role
-          aws-region: ${{ github.event.inputs.region }}
+          aws-region: ${{ env.AWS_REGION }}
       - name: chmod
         run: chmod -R +x ./.github *.sh
       - run: |
