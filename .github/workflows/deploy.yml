@@ -3,17 +3,32 @@ on:
   workflow_dispatch:
     inputs:
       region:
-        description: "Enter the AWS region (e.g., us-east-2)"
+        description: "Enter the region to bootstrap (e.g., us-east-2)"
         required: true
 
 env:
   AWS_REGION: ${{ github.event.inputs.region }}
-
 jobs:
-  deploy:
-    # needs: build TODO add dep on build
+  build:
+    name: Build and Package
     runs-on: ubuntu-latest
-    environment: dev # TODO handle other envs
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v2
+        name: Checkout Repository
+      - uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.IAMROLE_GITHUB }}
+          role-session-name: GitHub-Action-Role
+          aws-region: ${{ env.AWS_REGION }}
+      - name: chmod
+        run: chmod -R +x ./.github
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: Dev
     permissions:
       id-token: write
       contents: read
@@ -24,7 +39,5 @@ jobs:
           role-to-assume: ${{ secrets.IAMROLE_GITHUB }}
           role-session-name: GitHub-Action-Role
           aws-region: ${{ env.AWS_REGION }}
-      - name: chmod
-        run: chmod -R +x ./.github *.sh
       - run: |
           ./deploy.sh
