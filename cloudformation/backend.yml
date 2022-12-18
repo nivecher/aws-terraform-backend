@@ -9,7 +9,7 @@ Parameters:
   StateBucketName:
     Description: |
       Name of the S3 bucket to place the Terraform state files in;
-      Defaults to "terraform-state-AWS_ACCOUNT_ID"
+      Defaults to "terraform-state-AWS_REGION-AWS_ACCOUNT_ID"
     Type: String
     Default: ""
   LockTableName:
@@ -27,7 +27,7 @@ Resources:
       AccessControl: Private
       BucketName: !If
         - GenerateBucketName
-        - !Sub "terraform-state-${AWS::AccountId}"
+        - !Sub "terraform-state-${AWS::Region}-${AWS::AccountId}"
         - !Ref StateBucketName
       VersioningConfiguration:
         Status: Enabled
