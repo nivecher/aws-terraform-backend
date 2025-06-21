@@ -12,29 +12,168 @@ Parameters:
       Defaults to "terraform-state-AWS_REGION-AWS_ACCOUNT_ID"
     Type: String
     Default: ""
-  LockTableName:
-    Description: Name of the DynamoDB table to store state locks.
+  Project:
+    Description: Project name for resource tagging
     Type: String
-    Default: terraform-lock
+    Default: terraform-backend
+  Environment:
+    Description: Environment name (e.g., dev, staging, prod)
+    Type: String
+    Default: dev
+  EnableCloudTrail:
+    Description: Enable CloudTrail logging for the S3 bucket
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  
+  # Access logging configuration
+  LoggingBucketName:
+    Description: Name of the S3 bucket to store access logs (leave empty to disable access logging)
+    Type: String
+    Default: ""
 
 Conditions:
-  GenerateBucketName: !Equals [!Ref StateBucketName, ""]
+  GenerateBucketName: !Equals [ !Ref StateBucketName, "" ]
+  CreateCloudTrail: !Equals [ !Ref EnableCloudTrail, "true" ]
+  HasLoggingBucket: !Not [ !Equals [ !Ref LoggingBucketName, "" ]]
 
 Resources:
-  StateBucket:
-    Type: "AWS::S3::Bucket"
+  # KMS Key for DynamoDB encryption
+  KmsKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      AccessControl: Private
-      BucketName: !If
-        - GenerateBucketName
-        - !Sub "terraform-state-${AWS::Region}-${AWS::AccountId}"
-        - !Ref StateBucketName
+      Description: KMS key for encrypting DynamoDB table
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id: key-default-1
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-dynamodb-key"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref Project
+
+  KmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}-dynamodb"
+      TargetKeyId: !Ref KmsKey
+
+  # S3 Bucket for access logs
+  AccessLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName:
+        Fn::Sub: "${AWS::StackName}-logs-${AWS::AccountId}-${AWS::Region}"
+      LoggingConfiguration: !If
+        - HasLoggingBucket
+        - DestinationBucketName: !Ref LoggingBucketName
+          LogFilePrefix: !Sub "${AWS::StackName}-access-logs/"
+        - !Ref 'AWS::NoValue'
+      LifecycleConfiguration:
+        Rules:
+          - Id: AccessLogsExpiration
+            Status: Enabled
+            ExpirationInDays: 90
+            Prefix: "access-logs/"
+            ExpiredObjectDeleteMarker: false
+          - Id: NonCurrentVersionExpiration
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 7
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
       VersioningConfiguration:
         Status: Enabled
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Policy to enable access logging on the logs bucket itself
+  AccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AccessLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSSLRequestsOnly
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt AccessLogsBucket.Arn
+              - !Sub "${AccessLogsBucket.Arn}/*"
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+          - Sid: AllowLBLogging
+            Effect: Allow
+            Principal:
+              Service: logging.s3.amazonaws.com
+            Action:
+              - 's3:PutObject'
+            Resource: !Sub "${AccessLogsBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                's3:x-amz-acl': 'bucket-owner-full-control'
+
+  # S3 Bucket for Terraform state
+  StateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If
+        - GenerateBucketName
+        - !Sub "${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-tfstate"
+        - !Ref StateBucketName
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref AccessLogsBucket
+        LogFilePrefix: 's3/state-bucket/'
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldDeleteMarkers
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
+          - Id: AbortIncompleteMultipartUpload
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-state-bucket"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref Project
+        - Key: ManagedBy
+          Value: cloudformation
 
   StateBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -58,32 +197,143 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
+      # Using a dynamic name with stack ID to ensure uniqueness and allow for updates that require replacement
+      TableName: !If
+        - GenerateBucketName
+        - !Sub "${AWS::StackName}-terraform-lock-${AWS::AccountId}-${AWS::StackId}"
+        - !Sub "${AWS::StackName}-terraform-lock-${AWS::AccountId}-${AWS::StackId}"
       AttributeDefinitions:
         - AttributeName: LockID
           AttributeType: S
       KeySchema:
         - AttributeName: LockID
           KeyType: HASH
+      BillingMode: PROVISIONED
       ProvisionedThroughput:
         ReadCapacityUnits: 5
         WriteCapacityUnits: 5
-      TableName: !Ref LockTableName
-      # TODO add KMS encryption
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !GetAtt KmsKey.Arn
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-lock-table"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref Project
+        - Key: ManagedBy
+          Value: cloudformation
     Metadata:
       cfn_nag:
         rules_to_suppress:
           - id: W78
             reason: Terraform lock tables do not need to be backed up
-      Description: DynamoDB table to lock Terraform
+      Description: DynamoDB table to lock Terraform state
+
+  # CloudTrail for S3 bucket access logging
+  CloudTrailBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateCloudTrail
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-cloudtrail-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref AccessLogsBucket
+        LogFilePrefix: 's3/cloudtrail-bucket/'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt KmsKey.Arn
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-cloudtrail"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref Project
+        - Key: ManagedBy
+          Value: cloudformation
+
+  CloudTrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: CreateCloudTrail
+    Properties:
+      Bucket: !Ref CloudTrailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt CloudTrailBucket.Arn
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${CloudTrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+
+  CloudTrail:
+    Type: AWS::CloudTrail::Trail
+    Condition: CreateCloudTrail
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      S3BucketName: !Ref CloudTrailBucket
+      IncludeGlobalServiceEvents: false
+      IsLogging: true
+      IsMultiRegionTrail: false
+      EnableLogFileValidation: true
+      TrailName: !Sub "${AWS::StackName}-trail"
+      EventSelectors:
+        - IncludeManagementEvents: true
+          DataResources:
+            - Type: AWS::S3::Object
+              Values:
+                - !Sub "${StateBucket.Arn}/"
 
 Outputs:
   StackName:
     Value: !Ref AWS::StackName
+    Description: Name of the CloudFormation stack
   Region:
     Value: !Ref AWS::Region
+    Description: AWS region where resources are deployed
   StateBucketName:
     Description: Name of the S3 bucket containing Terraform state
     Value: !Ref StateBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-StateBucketName"
   LockTableName:
     Description: Name of the DynamoDB table used to lock Terraform state
     Value: !Ref LockTable
+    Export:
+      Name: !Sub "${AWS::StackName}-LockTableName"
+  KmsKeyArn:
+    Description: ARN of the KMS key used for DynamoDB encryption
+    Value: !GetAtt KmsKey.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-KmsKeyArn"
+  CloudTrailBucketName:
+    Description: Name of the S3 bucket containing CloudTrail logs
+    Value: !If [CreateCloudTrail, !Ref CloudTrailBucket, !Ref "AWS::NoValue"]
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudTrailBucketName"
